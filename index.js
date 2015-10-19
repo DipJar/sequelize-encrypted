@@ -1,3 +1,4 @@
+'use strict';
 var crypto = require('crypto');
 
 function EncryptedField(Sequelize, key, opt) {
@@ -12,7 +13,7 @@ function EncryptedField(Sequelize, key, opt) {
     opt = opt || {};
     self._algorithm = opt.algorithm || 'aes-256-cbc';
     self._iv_length = opt.iv_length || 16;
-};
+}
 
 EncryptedField.prototype.vault = function(name) {
     var self = this;
@@ -21,6 +22,7 @@ EncryptedField.prototype.vault = function(name) {
         type: self.Sequelize.BLOB,
         get: function() {
             var previous = this.getDataValue(name);
+
             if (!previous) {
                 return {};
             }
@@ -44,10 +46,10 @@ EncryptedField.prototype.vault = function(name) {
             var enc_final = Buffer.concat([new_iv, cipher.read()]);
             var previous = this.setDataValue(name, enc_final);
         }
-    }
+    };
 };
 
-EncryptedField.prototype.field = function(name) {
+EncryptedField.prototype.fieldInVault = function(name, vaultName) {
     var self = this;
 
     return {
@@ -55,15 +57,15 @@ EncryptedField.prototype.field = function(name) {
         set: function set_encrypted(val) {
             // use `this` not self because we need to reference the sequelize instance
             // not our EncryptedField instance
-            var encrypted = this.encrypted;
+            var encrypted = this[vaultName];
             encrypted[name] = val;
-            this.encrypted = encrypted;
+            this[vaultName] = encrypted;
         },
         get: function get_encrypted() {
-            var encrypted = this.encrypted;
+            var encrypted = this[vaultName];
             return encrypted[name];
         }
-    }
+    };
 };
 
 module.exports = EncryptedField;
