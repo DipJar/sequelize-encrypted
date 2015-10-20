@@ -4,21 +4,24 @@ Encrypted fields for Sequelize ORM
 
 ```js
 var Sequelize = require('sequelize')
-var EncryptedField = require('sequelize-encrypted');
+var enc = require('sequelize-encrypted');
 
-// secret key should be 32 bytes hex encoded (64 characters)
-var key = process.env.SECRET_KEY_HERE;
-
-var enc_fields = EncryptedField(Sequelize, key);
-
-var User = sequelize.define('user', {
+var User = sequelize.define('user', enc.enVault({
     name: Sequelize.STRING,
-    encrypted: enc_fields.vault('encrypted'),
-
+    vault: {
+       type: enc.VAULT,
+       // secret key should be 32 bytes hex encoded (64 characters)
+       key: process.env.SECRET_KEY,
+       // field: 'legacy_blob_field_name',
+       // algorithm: 'aes-256-cbc,
+       // ivLength: 16
+    },
     // encrypted virtual fields
-    private_1: enc_fields.field('private_1'),
-    private_2: enc_fields.field('private_2')
-})
+    private_1: enc.FIELD,
+    private_2: {
+       type: enc.FIELD
+    }
+}));
 
 var user = User.build();
 user.private_1 = 'test';
@@ -26,11 +29,9 @@ user.private_1 = 'test';
 
 ## How it works
 
-The `safe` returns a sequelize BLOB field configured with getters/setters for decrypting and encrypting data. Encrypted JSON encodes the value you set and then encrypts this value before storing in the database.
+The `withVault` adds a sequelize BLOB field to the model configured with getters/setters for decrypting and encrypting data. Encrypted JSON encodes the value you set and then encrypts this value before storing in the database.
 
-Additionally, there are `.field` methods which return sequelize VIRTUAL fields that provide access to specific fields in the encrypted vault. It is recommended that these are used to get/set values versus using the encrypted field directly.
-
-When calling `.vault` or `.field` you must specify the field name. This cannot be auto-detected by the module.
+Additionally, is a `FIELD` type that is replaced with a sequelize VIRTUAL field that provides access to specific fields in the encrypted vault. It is recommended that these are used to get/set values versus using the encrypted field directly.
 
 ## Generating a key
 

@@ -1,72 +1,97 @@
 'use strict';
+
 var crypto = require('crypto');
+var _ = require('lodash');
 
-function EncryptedField(Sequelize, key, opt) {
-    if (!(this instanceof EncryptedField)) {
-        return new EncryptedField(Sequelize, key, opt);
-    }
+exports.FIELD = 'ENCRYPTED_FIELD';
+exports.VAULT = 'FIELD_VAULT';
 
-    var self = this;
-    self.key = new Buffer(key, 'hex');
-    self.Sequelize = Sequelize;
+var defaultVault = {
+    algorithm: 'aes-256-cbc',
+    ivLength: 16
+};
 
-    opt = opt || {};
-    self._vaultField = opt.vaultField || 'encrypted';
-    self._algorithm = opt.algorithm || 'aes-256-cbc';
-    self._iv_length = opt.iv_length || 16;
-}
-
-EncryptedField.prototype.vault = function(/* ignored */) {
-    var self = this;
-
+function vault(DataTypes, config) {
     return {
-        type: self.Sequelize.BLOB,
+        type: DataTypes.BLOB,
+        field: config.field || config._vaultField,
         get: function() {
-            var previous = this.getDataValue(self._vaultField);
-
+            var previous = this.getDataValue(config._vaultField);
             if (!previous) {
                 return {};
             }
 
             previous = new Buffer(previous);
 
-            var iv = previous.slice(0, self._iv_length);
-            var content = previous.slice(self._iv_length, previous.length);
-            var decipher = crypto.createDecipheriv(self._algorithm, self.key, iv);
+            var iv = previous.slice(0, config.ivLength);
+            var content = previous.slice(config.ivLength, previous.length);
+            var decipher = crypto.createDecipheriv(config.algorithm, config.key, iv);
 
             var json = decipher.update(content, undefined, 'utf8') + decipher.final('utf8');
             return JSON.parse(json);
         },
         set: function(value) {
             // if new data is set, we will use a new IV
-            var new_iv = crypto.randomBytes(self._iv_length);
-
-            var cipher = crypto.createCipheriv(self._algorithm, self.key, new_iv);
+            var newIv = crypto.randomBytes(config.ivLength);
+            var cipher = crypto.createCipheriv(config.algorithm, config.key, newIv);
 
             cipher.end(JSON.stringify(value), 'utf-8');
-            var enc_final = Buffer.concat([new_iv, cipher.read()]);
-            var previous = this.setDataValue(self._vaultField, enc_final);
+            var encFinal = Buffer.concat([newIv, cipher.read()]);
+            var previous = this.setDataValue(config._vaultField, encFinal);
         }
     };
 };
 
-EncryptedField.prototype.field = function(name) {
-    var self = this;
-
-    return {
-        type: self.Sequelize.VIRTUAL,
-        set: function set_encrypted(val) {
-            // use `this` not self because we need to reference the sequelize instance
-            // not our EncryptedField instance
-            var encrypted = this[self._vaultField];
-            encrypted[name] = val;
-            this[self._vaultField] = encrypted;
-        },
-        get: function get_encrypted() {
-            var encrypted = this[self._vaultField];
-            return encrypted[name];
+exports.enVault = function(DataTypes, definition) {
+    var vaultConfigs = {};
+    function onlyVault() {
+        var vaultCount = _.keys(vaultConfigs).length;
+        if(vaultCount !== 1) {
+            throw new Error('More than one vault in use. Must specify "vault" for all encrypted fields. ' + vaultCount + ' vaults.');
         }
-    };
+        return _(vaultConfigs).values().last();
+    }
+    function normalizeIfMatching(thing, type) {
+        if (thing === type) {
+            return { type: type };
+        } else if (_.get(thing, 'type') === type) {
+            return thing;
+        } else {
+            return null;
+        }
+    }
+    // two passes b/c we want to establish the vault first.
+    return _.chain(definition).reduce(function(memo, v, k) {
+        var match = normalizeIfMatching(v, exports.VAULT);
+        if(match) {
+            var vaultConfig = _.chain(defaultVault).clone().merge(match, { _vaultField: k }).value();
+            // hex buffer for the key
+            vaultConfig.key = new Buffer(vaultConfig.key, 'hex');
+            vaultConfigs[k] = vaultConfig;
+            memo[k]  = vault(DataTypes, vaultConfig);
+        } else {
+            memo[k] = v;
+        }
+        return memo;
+    }, {}).reduce(function(memo, v, k) {
+        var match = normalizeIfMatching(v, exports.FIELD);
+        if (match) {
+            var myVault = _.get(vaultConfigs, match.vault, onlyVault());
+            memo[k] = {
+                type: DataTypes.VIRTUAL,
+                set: function(val) {
+                    var encrypted = this[myVault._vaultField];
+                    encrypted[k] = val;
+                    this[myVault._vaultField] = encrypted;
+                },
+                get: function () {
+                    var encrypted = this[myVault._vaultField];
+                    return encrypted[k];
+                }
+            };
+        } else {
+            memo[k] = v;
+        }
+        return memo;
+    }, {}).value();
 };
-
-module.exports = EncryptedField;
